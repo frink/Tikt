@@ -1,0 +1,96 @@
+#!/bin/bash
+# Jira Hooks for Ticket
+#
+# SERTTINGS:
+#
+#  jira_base_url='https://jira.somewhere.com:8443'
+#  jira_email='you@somewhere.com'
+#  jira_password='secret-words'
+
+jira_request=""
+jira_session=""
+
+function jira_login {
+	jira_request=$(curl $jira_base_url/login.jsp -d os_username=$(uri_escape $jira_email) -d os_password=$(uri_escape $jira_password) -d os_destination=/browse/$tikt_no -i -s)
+
+	if [ -n "$(jira_check_success)" ]; then
+		jira_get_cookie
+	else
+		echo "JIRA LOGIN FAILED!"
+	fi
+}
+
+function jira_check_success {
+	login_success=$(echo "${jira_request[@]}" | grep -i "Location: $jira_base_url/browse/$tikt_no")
+	echo "$login_success"
+}
+
+function jira_get_cookie {
+	jira_session=$(echo $jira_request | grep -i JSESSIONID | sed 's/.*JSESSIONID=\(.*\); Path.*/\1/')
+}
+
+function jira_comment {
+	jira_login
+
+	if [ $jira_session ]; then
+		jira_request=$(curl $jira_base_url/secure/AddComment.jspa -d key=$tikt_no -d comment=$1 -b JSESSIONID=$jira_session -i -s)
+
+		if [ -n "$(jira_check_success)" ]; then
+			echo -e "COMMENT: ${@//%/\x}"
+		else
+			echo "JIRA COMMENT FAILED!"
+		fi
+	fi
+}
+
+function jira_timelog {
+	jira_login
+
+	if [ $jira_session ]; then
+		jira_request=$(curl $jira_base_url/secure/CreateWorklog.jspa -d key=$tikt_no -d timeLogged=$1 -d startDate=$(date +%d/%b/%y+%I:%M+%p) -d comment=$2 -b JSESSIONID=$jira_session -i -s)
+
+		if [ -n "$(jira_check_success)" ]; then
+			echo -e "LOGGED TIME: $1$nl$nl${2//%/\x}"
+		else
+			echo "JIRA WORKLOG FAILED!"
+		fi
+	fi
+}
+
+function jira_resolve {
+	jira_login
+
+	if [ $jira_session ]; then
+		jira_request=$(curl $jira_base_url/secure/CommentAssignIssue.jspa -d key=$tikt_no -d resolution=8 -d issuetype=4 -d comment=$1 -b JSESSIONID=$jira_session -i -s)
+		echo $jira_request
+
+		if [ -n "$(jira_check_success)" ]; then
+			echo -e "COMMENT: ${@//%/\x}"
+		else
+			echo "JIRA COMMENT FAILED!"
+		fi
+	fi
+}
+
+function jira_assign {
+	jira_request=$(curl "$jira_base_url/secure/AssignIssue.jspa" -d "key=$tikt_no" -d "comment='$1'")
+}
+
+case $tikt_hook in
+	"before:command:comment")
+		jira_comment $(uri_escape "${commands[@]:2}")
+	;;
+	"before:command:tt" | "before:command:time")
+		jira_timelog ${commands[2]} $(uri_escape "${commands[@]:3}")
+	;;
+	"after:tikt:commit")
+		echo -n "Please set hours worked: "
+		read hours
+		comment="$(tikt_show_message;echo '';tikt_show_files)"
+		jira_timelog $hours $(uri_escape "$comment")
+	;;
+	"before:tikt:close ")
+		echo "RESOLVING: $tikt_no"
+		jira_resolve $(uri_escape "${commands[@]:2}")
+	;;
+esac

@@ -1,0 +1,8 @@
+#!bash
+
+case $tikt_hook in
+	"after:tikt:read" )
+		all_hooks=()
+	;;
+esac
+

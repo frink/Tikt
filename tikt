@@ -1,0 +1,583 @@
+#!/bin/bash
+
+alias ticket="bash $0"
+
+base_dir="$(pwd)/"
+separate="-----"
+nl="
+"
+
+tikt_info=()
+tikt_root=""
+tikt_dir=""
+tikt_cmd=""
+tikt_no=""
+
+tikt_dir=".tikt/"
+hook_dir="${tikt_dir}hooks/"
+global_ticket="all"
+tikt_template="default"
+
+commands=($@)
+message="$tikt_no$nl$nl$nl"
+hooks=""
+
+files=()
+
+all_vars=""
+all_hooks=""
+all_files=()
+
+shopt -s extglob
+
+# usage: fn_exists $fn;if [ $? -eq 0 ]; then...
+function fn_exists {
+	declare -f $1 > /dev/null
+}
+
+# usage $(uri_escape "$str")
+function uri_escape {
+	local y
+	y="$@"
+	echo -n "${y/\\/\\\\}" | while read -n1; do
+	if [[ $REPLY =~ '[A-Za-z0-9]' ]]; then
+		REPLY=$(printf "$REPLY")
+	else
+		if [ -z "$REPLY" ]; then
+			REPLY="%0D%0A"
+		else
+			REPLY=$(printf "%%%02x" \'"$REPLY")
+		fi
+	fi
+		echo -n "$REPLY";
+	done
+	echo
+}
+
+# usage: tikt_read $tikt_no
+function tikt_read {
+	tikt_info=()
+
+	tikt_do_hook "before:tikt:read"
+
+	tikt_file="$tikt_dir$1"
+
+	#echo $HOME/$tikt_file
+	if [ -f "$HOME/$tikt_file" ]; then
+		tikt_file="$HOME/$tikt_file"
+	fi
+
+	#echo $tikt_file
+	if [ -f "$tikt_file" ]; then
+		i=0
+
+		while read ln
+		do
+			if [ "$ln" != $separate ]; then
+				if [ -z "${tikt_info[$i]// /_}" ]; then
+					tikt_info[$i]="$ln"
+				else
+					tikt_info[$i]="${tikt_info[$i]}$nl$ln"
+				fi
+			else
+				i=$[$i + 1]
+			fi
+		done < $tikt_file
+	else
+		if [ "$1" != $tikt_template ]; then
+			tikt_do_hook "before:tikt:read:template"
+			tikt_read $tikt_template
+			tikt_do_hook "after:tikt:read:template"
+		fi
+
+	fi
+
+	if [ "$1" == $global_ticket ]; then
+		tikt_do_hook "before:tikt:read:global"
+		all_vars="${tikt_info[0][@]}"
+		all_hooks="${tikt_info[1][@]}"
+		all_files=( ${tikt_info[2][@]} )
+		tikt_do_hook "after:tikt:read:global"
+	else
+		message="${tikt_info[0][@]}"
+		hooks="${tikt_info[1][@]}"
+		files=( ${tikt_info[2][@]} )
+	fi
+
+	tikt_do_hook "after:tikt:read"
+}
+
+# usage: tikt_write $tikt_no
+function tikt_write {
+	files=($(printf '%s\n' "${files[@]}"|sort|uniq))
+
+	if [ -n "$1" ]; then
+		tikt_file="$tikt_dir$1"
+		if [ -f "$HOME/$tikt_file" ]; then
+			tikt_file="$HOME/$tikt_file"
+		fi
+	fi
+
+	tikt_do_hook "before:tikt:write"
+
+	#echo "WRITING: $tikt_file"
+	if [ "$1" == $global_ticket ]; then
+		echo "$all_vars$nl$separate$nl$all_hooks$nl$separate" > $tikt_file
+		files=(${all_files[@]})
+	else
+		echo "$message$nl$separate$nl$hooks$nl$separate" > $tikt_file
+	fi
+
+	for file in ${files[@]}
+	do
+		echo $file >> $tikt_file
+	done
+	tikt_do_hook "after:tikt:write"
+}
+
+# usage: tikt_close $tikt_no
+function tikt_close {
+	if [ -n "$1" ]; then
+		tikt_file="$tikt_dir$1"
+	fi
+
+	if [ -f "$HOME/$tikt_file" ]; then
+		tikt_file="$HOME/$tikt_file"
+	fi
+
+	if [ ! -f $tikt_file ]; then
+		echo "TICKET DOES NOT EXIST: $tikt_no"
+		exit
+	fi
+
+	tikt_do_hook "before:tikt:close"
+
+	echo "CLOSING TICKET: $tikt_no";
+	rm $tikt_file*
+
+	tikt_do_hook "after:tikt:close"
+}
+
+# usage: tikt_close $tikt_no
+function tikt_edit {
+	edit_files=$(tikt_var_replace ${files[@]})
+	edit_files="$edit_files $tikt_file"
+
+	tikt_do_hook "before:tikt:edit"
+
+	$EDITOR $edit_files
+
+
+	for file in ${edit_files[@]}
+	do
+		if [ -f $file~ ]; then
+			rm $file~
+		fi
+	done
+
+	tikt_do_hook "after:tikt:edit"
+}
+
+# usage: tikt_clean
+function tikt_clean {
+	tikt_do_hook "before:tikt:clean"
+	files=()
+	tikt_do_hook "after:tikt:clean"
+}
+
+# usage: tikt_commit
+function tikt_commit {
+	tikt_do_hook "before:tikt:commit"
+	if [ -z $files ]; then
+		echo "There are no files for this ticket to commit yet."
+		return
+	fi
+	tikt_do_hook "after:tikt:commit"
+}
+
+# usage: tikt_show_all
+function tikt_show_all {
+	tikt_do_hook "before:show:all"
+	echo "TICKET: $tikt_no$nl$separate"
+	tikt_show_message
+	echo $separate
+	tikt_show_hooks
+	echo $separate
+	tikt_show_files
+	tikt_do_hook "after:show:all"
+}
+
+# usage: tikt_show_files
+function tikt_show_files {
+	tikt_do_hook "before:show:files"
+	if [ -z $files ]; then
+		echo "There are no files for this ticket to commit yet."
+		return
+	fi
+	for file in ${files[@]}
+	do
+		echo "${base_dir#$tikt_root}$file"
+	done
+	tikt_do_hook "after:show:files"
+}
+
+# usage: tikt_show_hooks
+function tikt_show_hooks {
+	tikt_do_hook "before:add:hook"
+	echo "$all_hooks$nl$hooks"
+	tikt_do_hook "after:add:hook"
+}
+
+# usage: tikt_show_message
+function tikt_show_message {
+	tikt_do_hook "before:show:message"
+	echo "${message}"
+	tikt_do_hook "after:show:message"
+}
+
+# usage tikt_show_tickets
+function tikt_show_tickets {
+	# tickets=$( cd $HOME/$tikt_dir && find * ! -name $global_ticket ! -name $tikt_template -prune -type f)
+	tickets=($tickets $( cd $tikt_dir && find * ! -name $global_ticket ! -name $tikt_template -prune -type f))
+
+	tikt_do_hook "before:show:tickets"
+
+	for ticket in ${tickets[@]}
+	do
+		echo "$ticket"
+	done
+
+	tikt_do_hook "after:show:tickets"
+
+}
+
+# usage: tikt_add_files $files
+function tikt_add_files {
+	tikt_do_hook "before:add:files"
+	new_files=($@)
+	for file in ${new_files[@]}
+	do
+		files[${#files[*]}]="${base_dir#$tikt_root}$file"
+		echo "ADDING: $base_dir$file"
+	done
+	tikt_do_hook "after:add:files"
+}
+
+# usage: tikt_add_hooks $hooks
+function tikt_add_hooks {
+	hook_files=($(printf '%s\n' "$@"|sort|uniq))
+	tikt_do_hook "before:add:hooks"
+
+	for file in ${hook_files[@]}
+	do
+		if [ -f "$HOME/$hook_dir$file" ]; then
+			file="$HOME/$hook_dir$file"
+		else
+			file="$hook_dir$file"
+		fi
+
+		if [ -f "$file" ]; then
+			tikt_do_hook "before:add:hook:success"
+			#echo "HOOK EXISTS: $file"
+			hooks="${hooks}${nl}source \"$file\""
+			tikt_do_hook "after:add:hook:success"
+		else
+			tikt_do_hook "before:add:hook:fails"
+			echo "HOOK DOESN'T EXIST: $file"
+			tikt_do_hook "after:add:hook:fails"
+		fi
+	done
+
+	tikt_do_hook "after:add:hooks"
+}
+
+# usage: tikt_add_message $message
+function tikt_add_message {
+	tikt_do_hook "before:add:message"
+
+	if [ ! -z "$1" ]; then
+		message="$@"
+		# message="$message$nl$@"
+		# message=${message%$nl}
+	fi
+
+	tikt_do_hook "after:add:message"
+}
+
+# usage: tikt_remove_files $files
+function tikt_remove_files {
+	tikt_do_hook "before:remove:files"
+	old_files=($@)
+	for old_file in ${old_files[@]}
+	do
+		old_file="${base_dir#$tikt_root}$old_file"
+		i=0
+		for file in ${files[@]}
+		do
+			file="${base_dir#$tikt_root}$file"
+			if [ $file == $old_file ]; then
+				echo "REMOVING: $base_dir$file"
+				unset files[$i]
+			fi
+			i=$[$i + 1]
+		done
+	done
+	tikt_do_hook "after:remove:files"
+}
+
+# usage: tikt_do_hook $hook
+function tikt_do_hook {
+	tikt_hook=$1
+
+	if [ "$tikt_no" != $global_ticket ]; then
+		run_hooks="$hooks$nl$all_hooks$nl"
+	else
+		run_hooks="$hooks$nl"
+	fi
+
+	run_hooks=${run_hooks//#+([^$nl])$nl}
+	if [ ! -z "${run_hooks//[[:space:]]}" ]; then
+		run_hooks=${run_hooks//+($nl)/;}
+		eval ${run_hooks##*(;)}
+	fi
+}
+
+# usage: tikt_info
+function tikt_info {
+	tikt_info_copyright
+
+	tikt_info_usage
+
+	exit
+}
+
+# usage: tikt_info_copyright
+function tikt_info_copyright {
+	tikt_do_hook "before:info:copyright"
+
+	echo "${nl} tikt  -  Ticket Base Source Code Management!${nl} © 2011 Micon Frink - [ http://FRINKnet.com ]${nl} License: GPL, MIT, BSD - Take your pick! :-p"
+
+	tikt_do_hook "after:info:copyright"
+}
+
+# usage: tikt_info_usage
+function tikt_info_usage {
+	echo ''
+	echo " Usage: tikt [ticket] [command] [options]"
+
+	tikt_do_hook "after:info:usage"
+
+	echo ''
+	echo " Command:
+
+	add [file ...]
+	remove [file ...]
+	hooks [file ...]
+	hook [file ...]
+	edit
+	close
+	clean
+	clone ticket
+	files
+	"
+
+	tikt_do_hook "after:info:commands"
+
+}
+
+# usage: tikt_make_dir
+function tikt_make_dir {
+	tikt_do_hook "before:tikt:make:dir"
+	if [ -d $tikt_dir ]; then
+		read -p "REMOVE TICKET DIRECTORY? [Y/n] " -n 1
+		if [[ ! $REPLY =~ ^[Nn]$ ]]
+		then
+			rm -r $tikt_dir
+		fi
+	fi
+
+	if [ ! -d $tikt_dir ]; then
+		echo "CREATED: $tikt_dir"
+		mkdir $tikt_dir
+	fi
+	
+	if [ ! -d $hook_dir ]; then
+		echo "CREATED: $hook_dir"
+		mkdir $hook_dir
+	fi
+
+	tikt_do_hook "after:tikt:make:dir"
+}
+
+# usage: tikt_find_dir
+function tikt_find_dir {
+	tikt_do_hook "before:tikt:find:dir"
+	parent=""
+	grandparent="."
+
+	if [ -d "$grandparent/.ticket" ]; then
+			parent=$grandparent
+	else
+		while [ ! -d "$grandparent/.ticket" ]; do
+			parent=$grandparent
+			grandparent="$parent/.."
+		done
+	fi
+
+	if [ -z $parent ]; then
+		echo "This directory is not under ticket control."
+		exit
+	fi
+
+	tikt_root="$(cd $parent; pwd)/"
+
+	tikt_do_hook "after:tikt:find:dir"
+
+	cd $tikt_root
+}
+
+# usage: tikt_var_replace $string_with bash replacements
+function tikt_var_replace {
+	eval "echo \"$@\""
+}
+
+tikt_read $global_ticket
+
+if [ $1 ]; then
+	if [ $2 ]; then
+		tikt_cmd=$2
+	else
+		tikt_cmd="show"
+	fi
+
+	tikt_no=$1
+else
+	tikt_info
+fi
+
+tikt_find_dir $base_dir
+
+tikt_read $global_ticket
+
+all_vars=${all_vars//#+([^$nl])$nl}
+if [ ! -z "${all_vars//[[:space:]]}" ]; then
+	all_vars=${all_vars//+($nl)/;}
+	eval ${all_vars##*(;)}
+fi
+
+tikt_do_hook "before:special:$tikt_no"
+
+case $tikt_no in
+	"init" | "setup")
+	tikt_make_dir
+	exit
+	;;
+	"list" | "ls")
+	tikt_show_tickets
+	exit
+	;;
+esac
+
+tikt_do_hook "after:special:$tikt_no"
+
+tikt_read $tikt_no
+
+tikt_do_hook "before:translate:command"
+
+# shortcut translation
+case $tikt_cmd in
+	"e")
+	tikt_cmd="edit"
+	;;
+	"ci")
+	tikt_cmd="commit"
+	;;
+	"+" | "ls")
+	tikt_cmd="add"
+	;;
+	"-" | "del" | "delete" | "rem" | "rm")
+	tikt_cmd="remove"
+	;;
+	"=")
+	tikt_cmd="clone"
+	;;
+	"done" | "x")
+	tikt_cmd="close"
+	;;
+	"msg" | "mesg" | "m")
+	tikt_cmd="message"
+	;;
+	"mv" | "to" | "move")
+	tikt_cmd="rename"
+	;;
+	"++" )
+	tikt_cmd="addhook"
+	;;
+	"--" )
+	tikt_cmd="delhook"
+	;;
+esac
+
+tikt_do_hook "after:translate:command"
+
+tikt_do_hook "before:command:$tikt_cmd"
+
+# basic commands
+case $tikt_cmd in
+	"add")
+	tikt_add_files ${commands[@]:2}
+	tikt_write $tikt_no
+	echo ""
+	tikt_show_files $tikt_no
+	tikt_write $tikt_no
+	;;
+	"remove")
+	tikt_remove_files ${commands[@]:2}
+	echo ""
+	tikt_show_files $tikt_no
+	tikt_write $tikt_no
+	;;
+	"edit")
+	tikt_add_files ${commands[@]:2}
+	tikt_write $tikt_no
+	tikt_edit $tikt_no
+	;;
+	"rename")
+	echo "RENAMING: $tikt_no to ${commands[2]}"
+	rm $tikt_file*
+	tikt_write ${commands[2]}
+	;;
+	"commit")
+	tikt_add_message ${commands[@]:2}
+	tikt_commit $tikt_no
+	;;
+	"clone")
+	echo "CLOANING: $tikt_no to ${commands[2]}"
+	tikt_write ${commands[2]}
+	;;
+	"clean")
+	tikt_clean $tikt_no
+	tikt_write $tikt_no
+	;;
+	"close")
+	tikt_close $tikt_no
+	;;
+	"show")
+	tikt_show_all ${commands[@]:2}
+	;;
+	"files")
+	tikt_show_files
+	;;
+	"message")
+	tikt_add_message ${commands[@]:2}
+	tikt_show_message
+	tikt_write $tikt_no
+	;;
+	"addhook")
+	tikt_add_hooks ${commands[@]:2}
+	tikt_show_hooks $tikt_no
+	tikt_write $tikt_no
+	;;
+esac
+
+tikt_do_hook "after:command:$tikt_cmd"

@@ -1,0 +1,41 @@
+#!bash
+
+case $tikt_hook in
+	"before:command:update" | "before:command:up")
+		echo "SUBVERSION UPDATE FOR TICKET: $tikt_no"
+		svn update ${files[@]} ${all_files[@]}
+		exit
+	;;
+	"before:command:status" | "before:command:stat")
+		tikt_read $tikt_no
+		echo "SUBVERSION STATUS FOR TICKET: $tikt_no"
+		svn status ${files[@]} ${all_files[@]}
+		exit
+	;;
+	"before:command:branchdiff" | "before:command:bdiff")
+		for file in ${files[@]}
+		do
+			new_branch=${commands[2]}
+			if [ ${new_branch:(-1)} == "/" ]; then
+				new_branch=${new_branch:0:(${#new_branch}-1)}
+			fi
+			vimdiff $file ${new_branch}/$file
+		done
+		exit
+	;;
+	"before:command:diff")
+		svn diff ${files[@]} ${all_files[@]}
+		exit
+	;;
+	"before:tikt:commit")
+		echo "UPDATING FROM SOURCE REPOSITORY"
+		svn update
+		;;
+	"after:tikt:commit")
+		echo "COMMITING TICKET: $tikt_no"
+		echo "$message" > ".svn-commit.$tikt_no"
+		svn commit ${files[@]} ${all_files[@]} -F ".svn-commit.$tikt_no"
+		rm ".svn-commit.$tikt_no"
+
+	;;
+esac

@@ -1,0 +1,8 @@
+#!/bin/bash
+
+case $tikt_hook in
+	"before:command:close" )
+		echo "TICKET PERSISTENT${nl}Please leave this ticket open..."
+		exit
+	;;
+esac

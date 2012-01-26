@@ -1,0 +1,22 @@
+#!/bin/bash
+
+
+case $tikt_hook in
+	"after:command:edit")
+
+
+		if (( ${#php_run_files[@]} == 0 )); then
+			echo "RUNING ALL PHP FILES"
+			php_run_files=$(tikt_var_replace ${files[@]})
+		fi
+
+		for file in ${php_run_files[@]}
+		do
+			if [[ "${file##*.}" == "php" ]]; then
+				echo "RUNNING: $file$nl$separate"
+				php $file
+			fi
+		done
+	;;
+esac
+
